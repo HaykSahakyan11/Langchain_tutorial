@@ -1,88 +1,79 @@
-# System One Models, with Jev and LangChain
+# Agent Middleware, with LangChain
 
 Created by [Hayk Sahakyan](https://github.com/HaykSahakyan11).
 
-Code for this lesson lives on the [`project/system-one-models`](https://github.com/HaykSahakyan11/Langchain_tutorial/tree/project/system-one-models) branch of this repo.
+Code for this lesson lives on the [`project/agent-middleware`](https://github.com/HaykSahakyan11/Langchain_tutorial/tree/project/agent-middleware) branch of this repo.
 
-**Jev** (by [TypeSafe AI](https://typesafe.ai)) never generates text. You give it state and typed
-questions, and it returns calibrated answers (a probability, a label, or a score) in milliseconds.
+One support-desk agent and four kinds of middleware. Middleware plugs into the agent loop at fixed hook points, so you
+can compact the loop's memory, guard it, pause it, or steer it without touching the model or the tools.
 
-> **Agent = Model + Harness.** The chat model does the work. Jev makes the harness's decisions.
+> **Agent = Model + Harness.** Middleware is how you add your own code to the harness.
 
 ```mermaid
 graph TB
-    User([User message]) --> Route
+    User([User message]) --> BA
     subgraph Harness["create_agent(model, tools, middleware=[...])"]
-        Route{"ModelRouterMiddleware<br/>Choice: fast or powerful?"}
-        Model["Chat model"]
-        Gate{"AutoModeMiddleware<br/>Noul: is this call risky?"}
-        Tool["Tool"]
-        Blocked["error ToolMessage"]
+        BA["before_agent"]
+        BM["before_model"]
+        Model["wrap_model_call → model"]
+        AM["after_model"]
+        Tool["wrap_tool_call → tool"]
+        AA["after_agent"]
     end
-    Route --> Model
-    Model -->|tool call| Gate
-    Gate -->|"p < 0.5"| Tool
-    Gate -->|"p ≥ 0.5"| Blocked
-    Tool --> Model
-    Blocked --> Model
-    Model --> Answer([Answer])
+    BA --> BM --> Model --> AM
+    AM -->|tool call| Tool --> BM
+    AM -->|final answer| AA
+    BA -.->|"jump_to: end"| AA
+    AA --> Answer([Answer])
 ```
 
-## The three primitives
+## Three jobs for a hook
 
-| Primitive | Question         | You get back                                   |
-| --------- | ---------------- | ---------------------------------------------- |
-| `Noul`    | yes / no         | `noul`: P(yes)                                 |
-| `Choice`  | one of N labels  | `choice`, `probabilities`, `confidence`        |
-| `Score`   | ordered rubric   | `score`, `legend`, `probabilities`, `confidence` |
+| Job         | What the hook does                                    | Step   |
+| ----------- | ----------------------------------------------------- | ------ |
+| **Compact** | Rewrites state before the model call (old messages → one summary) | 02     |
+| **Guard**   | Stops or rewrites what passes through (`jump_to`, PII, limits, approval) | 03, 04 |
+| **Steer**   | Rewrites the model request (prompt, model, tools)     | 05     |
 
-`confidence` describes the shape of the distribution. It is **not** the top label's probability.
+Order is an onion. For `middleware=[a, b]`, `before_*` hooks run a then b, `after_*` hooks run b then a, and `wrap_*` hooks
+nest with `a` outermost. Node hooks (`before_*`, `after_*`) are their own steps in the graph. Wrap hooks run inside the
+model or tool step.
 
 ## Steps
 
 One commit per step. Check out a commit to see the lesson up to that point.
 
-| #   | Commit    | File                                                             | Look for                                              |
-| --- | --------- | ---------------------------------------------------------------- | ----------------------------------------------------- |
-| 00  | `HASH0` | deps                                                             | Setup only                                            |
-| 01  | `HASH1` | [`01_hello_jev.py`](01_hello_jev.py)                             | Managed Jev or local `tev1`: same class, same answer  |
-| 02  | `HASH2` | [`02_three_primitives.py`](02_three_primitives.py)               | Three answers from one call                           |
-| 03  | `HASH3` | [`03_messages_and_state.py`](03_messages_and_state.py)           | Messages and a policy inside JSON state               |
-| 04  | `HASH4` | [`04_model_router_middleware.py`](04_model_router_middleware.py) | Easy task → `gpt-6-luna`, hard task → `gpt-6-sol`     |
-| 05  | `HASH5` | [`05_auto_mode_middleware.py`](05_auto_mode_middleware.py)       | Your delete runs; an injected delete is **BLOCKED**   |
+| #   | Commit    | File                                                         | Look for                                                  |
+| --- | --------- | ------------------------------------------------------------ | --------------------------------------------------------- |
+| 00  | `1296780` | deps                                                         | Setup only                                                |
+| 01  | `4f501b2` | [`01_support_agent.py`](01_support_agent.py)                 | Nobody supervises the $340 refund                         |
+| 02  | `4115613` | [`02_summarization.py`](02_summarization.py)                 | `messages` drops, yet turn 4 still knows about B200       |
+| 03  | `106d1c9` | [`03_guardrails.py`](03_guardrails.py)                       | `calls: 0` on block, `[REDACTED_EMAIL]`, one refund only  |
+| 04  | `1c78a8e` | [`04_human_in_the_loop.py`](04_human_in_the_loop.py)         | `refunds: {}` while paused, then 340, 100 or nothing      |
+| 05  | `b279e69` | [`05_runtime_context.py`](05_runtime_context.py)             | Same question: free escalates on luna, pro refunds on sol |
+
+[`desk.py`](desk.py) holds the fake orders and the three tools, so each step only shows its middleware.
 
 ## Quick start
 
 ```bash
-git checkout project/system-one-models
+git checkout project/agent-middleware
 uv sync
-cp .env.example .env   # set TYPESAFE_API_KEY, and OPENAI_API_KEY for 04–05
-ollama pull tev1       # open-source Jev for 01
-uv run python 01_hello_jev.py
+cp .env.example .env   # set OPENAI_API_KEY
+uv run python 01_support_agent.py
 ```
 
-Verified against `langchain-typesafe 0.0.1a3`. The middleware is experimental, so the API may change.
-
-## Running Jev locally
-
-Ollama (0.35+) serves the same Jev API at `/v1/systemone`, so the swap is `base_url` and `model`:
-
-```python
-TypeSafeClassifier(base_url="http://localhost:11434", model="tev1", api_key="ollama")
-```
-
-`api_key` can be any non-empty string. 04 and 05 stay on managed Jev: the middleware builds its own classifier.
-
-## Coming: OpenAI Decisions API
-
-OpenAI announced a Decisions API (GPT-6 Luna) at DevDay 2026. It is in limited preview with no public schema
-or SDK yet, so there is no lesson for it.
+Verified against `langchain 1.4.6` and `langgraph 1.2.16`.
 
 ## Further reading
 
-- [What Is Jev?](https://www.langchain.com/blog/building-a-harness-with-jev) (LangChain blog)
-- [TypeSafe docs](https://docs.typesafe.ai/)
-- [LangChain TypeSafe integration](https://docs.langchain.com/oss/python/integrations/providers/typesafe)
+- [Middleware overview](https://docs.langchain.com/oss/python/langchain/middleware/overview)
+- [Custom middleware](https://docs.langchain.com/oss/python/langchain/middleware/custom)
+- [Built-in middleware](https://docs.langchain.com/oss/python/langchain/middleware/built-in) and [summarization](https://docs.langchain.com/oss/python/langchain/middleware/built-in#summarization)
+- [Guardrails](https://docs.langchain.com/oss/python/langchain/guardrails)
+- [Human-in-the-loop](https://docs.langchain.com/oss/python/langchain/human-in-the-loop)
+- [Runtime](https://docs.langchain.com/oss/python/langchain/runtime) and [context engineering](https://docs.langchain.com/oss/python/langchain/context-engineering)
+- [Observability](https://docs.langchain.com/oss/python/langchain/observability)
 
 ## Credits
 
